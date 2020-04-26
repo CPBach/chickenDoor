@@ -6,6 +6,8 @@
 * (PCINT4/ADC2)           PB4   -|3   6|- PB1 (MISO/AIN1/OC0B/INT0/PCINT1)
 *                         GND   -|4   5|- PB0 (MOSI/AIN0/OC0A/PCINT0)
 *                                 -----
+
+*  USE FUSE BITS: LOW 0x2A, HIGH: 0xFF : CLK Src Internal 9.6MhZ / 8, Preserve EEPROM through CHIP erase,
 */
 #include <avr/io.h>
 #include <avr/sleep.h>
@@ -15,9 +17,19 @@
 #include "driver.h"
 #include "main.h"
 
+#define MOTOR_LEFT_PIN PB0
+#define MOTOR_RIGHT_PIN PB1
+#define UI_PIN PB2
+#define UI_PIN_INT PCINT2
+#define UI_PIN_ADC MUX0
+#define STATUS_LED_PIN PB3
+#define END_SWITCH_PIN PB4
+
 void go_to_deep_sleep() {
 	adcOn(false);
-	MCUCR = 0; // TODO: set bit 5 to 1, 	Set Bit 4 to 1, Bit 3 to 0 -> SM1=1;SM0=0 and also Sleep enable
+	MCUCR |= (1 << SE);
+	MCUCR &= ~(1 << SM0);	
+	MCUCR |= (1 << SM1);
 	MCUCR |= (3<<5); // set both BODS and BODSE
 	MCUCR = (MCUCR & ~(1 << 5)) |(1<<6); // then set  BODS bit and clear BODSE bit
 	__asm__ __volatile__("sleep");
@@ -25,6 +37,29 @@ void go_to_deep_sleep() {
 
 void wakeUpRoutine() {
 	adcOn(true);
+	enableINT0(false);
+}
+
+void setupDriver() {
+/*	Setup input / output ports:
+	-> Output: Motor left:      PB0 -> INITIAL OUTPUT -> LOW
+	-> Output: Motor right:     PB1 -> INITIAL OUTPUT -> LOW
+	-> Output: Status LED       PB3 -> INITIAL OUTPUT -> HIGH
+	-> Input: Switch ADC input: PB2 -> NO INTERNAL PULL UP!
+	-> Input: End-Schalter:     PB4 -> NO INTERNAL PULL UP! */
+	/* DISABLE Pull ups */
+	MCUCR |= (1 << PUD);
+	DDRB  |=   (1 << MOTOR_LEFT_PIN) | (1 << MOTOR_RIGHT_PIN) | (1 << STATUS_LED_PIN);
+	DDRB  &= ~((1 << UI_PIN) | (1 << END_SWITCH_PIN));
+	PORTB &= ~((0 << MOTOR_LEFT_PIN) | (0<<MOTOR_RIGHT_PIN));
+	PORTB |= (1 << STATUS_LED_PIN);
+	sleep(5000);
+	sei();
+	enableINT0(true);
+	setupWatchdog(9);
+	go_to_deep_sleep();
+	wakeUpRoutine();
+	main();
 }
 
 // Set it to 9 for 8s interval.
@@ -47,28 +82,33 @@ void setupWatchdog(int ii) {
 void adcOn(bool adcOn) {
 	if(adcOn) {
 		/* Turn on adc  */
+		ADMUX  |= (1<<REFS0);
+		ADMUX  |= (1<<MUX0);
+		ADCSRA |= (1<<ADEN);
 	} else {
 		/* Turn off adc */
+		ADMUX &= ~(1<<UI_PIN_ADC);
 		ADCSRA &= ~(1<<ADEN);
 	}
 }
 
 void statusLED(bool on) {
-	
+	PORTB &= ~(1 << STATUS_LED_PIN);
+	if (on) {
+		PORTB |= (1 << STATUS_LED_PIN);
+	}
 }
 
 void burstLED() {
 	for(int i=0; i<20; i++) {
 		// LED ON
-		_delay_ms(BURST_DELAY);
+		sleep(BURST_DELAY);
 		// LED OFF
-		_delay_ms(BURST_DELAY);
+		sleep(BURST_DELAY);
 	}
 }
 
-void sleep(int ms){
-	_delay_ms(ms);
-}
+
 
 void printSingleDigit(int number) {
 	burstLED();
@@ -94,29 +134,40 @@ void printHexNumber(uint16_t number) {
 }
 
 void motorLeft(bool isOn) {
-	
+	PORTB &= ~((1 << MOTOR_RIGHT_PIN) | (1 << MOTOR_LEFT_PIN));
+	if (isOn) {
+		PORTB |= (1 << MOTOR_LEFT_PIN);
+	}
 }
 
 void motorRight(bool isOn) {
-	
+	PORTB &= ~((1 << MOTOR_RIGHT_PIN) | (1 << MOTOR_LEFT_PIN));
+	if (isOn) {
+		PORTB |= (1 << MOTOR_RIGHT_PIN);
+	}
+}
+
+
+void enableINT0(bool enable) {
+	if (enable) {
+		MCUCR |= (1 << PCIE);
+		PCMSK |= (1 << UI_PIN_INT);
+	} else {
+		MCUCR &= ~(1 << PCIE);
+		PCMSK &= ~(1 << UI_PIN_INT);
+	}
+}
+
+void sleep(int ms){
+	_delay_ms(ms);
+}
+
+ISR(INT0_vect) {
+	wakeUpRoutine();
+	uiTriggered();
 }
 
 ISR(WDT_vect) {
 	wakeUpRoutine();
 	watchDogInterruptCallback();
-}
-
-void enableINT0(bool enable) {
-	if (enable) {
-		// enable interrupt 0
-	} else {
-		// disable interrupt 0
-	}
-}
-
-ISR(INT0_vect) {
-	wakeUpRoutine();
-	// Turn off INT0
-	enableINT0(false);
-	uiTriggered();
 }

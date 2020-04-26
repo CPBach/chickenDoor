@@ -16,4 +16,5 @@ void rightButtonReleased(void);
 void openCage(void);
 void uiTriggered(void);
 void watchDogInterruptCallback(void);
+int main(void);
 #endif
